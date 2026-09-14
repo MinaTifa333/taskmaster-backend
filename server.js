@@ -9,18 +9,20 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
+const JWT_SECRET = JWT_SECRET || 'taskmaster_secret_key_2026_super_secure';
+
 const config = {
-  server: process.env.DB_SERVER,
-  database: process.env.DB_DATABASE,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
+  server: process.env.DB_SERVER || 'db68359.public.databaseasp.net',
+  database: process.env.DB_DATABASE || 'db68359',
+  user: process.env.DB_USER || 'db68359',
+  password: process.env.DB_PASSWORD || 'jK?6S=2n5Yw+',
   options: {
     encrypt: true,
     trustServerCertificate: true,
     enableArithAbort: true
   },
-  connectionTimeout: 10000,
-  requestTimeout: 10000
+  connectionTimeout: 30000,
+  requestTimeout: 30000
 };
 
 let pool = null;
@@ -158,7 +160,7 @@ function authMiddleware(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'No token provided' });
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, JWT_SECRET);
     req.userId = decoded.userId;
     next();
   } catch (err) {
@@ -185,7 +187,7 @@ app.post('/api/auth/signup', async (req, res) => {
       .input('email', sql.NVarChar, email)
       .input('password', sql.NVarChar, hashedPassword)
       .query('INSERT INTO Users (id, name, email, password) VALUES (@id, @name, @email, @password)');
-    const token = jwt.sign({ userId: id }, process.env.JWT_SECRET, { expiresIn: '30d' });
+    const token = jwt.sign({ userId: id }, JWT_SECRET, { expiresIn: '30d' });
     res.json({ token, user: { id, name, email } });
   } catch (err) {
     console.error('Signup error:', err);
@@ -208,7 +210,7 @@ app.post('/api/auth/login', async (req, res) => {
     if (!valid) {
       return res.status(400).json({ error: 'Invalid credentials' });
     }
-    const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '30d' });
+    const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '30d' });
     res.json({ token, user: { id: user.id, name: user.name, email: user.email } });
   } catch (err) {
     console.error('Login error:', err);

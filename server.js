@@ -1,4 +1,3 @@
-require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
@@ -9,38 +8,50 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-const JWT_SECRET = JWT_SECRET || 'taskmaster_secret_key_2026_super_secure';
+const JWT_SECRET = process.env.JWT_SECRET || 'taskmaster_secret_key_2026_super_secure';
 
 const config = {
-  server: process.env.DB_SERVER || 'db68359.public.databaseasp.net',
-  database: process.env.DB_DATABASE || 'db68359',
-  user: process.env.DB_USER || 'db68359',
-  password: process.env.DB_PASSWORD || 'jK?6S=2n5Yw+',
+  server: 'db68359.public.databaseasp.net',
+  database: 'db68359',
+  user: 'db68359',
+  password: 'jK?6S=2n5Yw+',
   options: {
     encrypt: true,
     trustServerCertificate: true,
     enableArithAbort: true
+  },
+  pool: {
+    max: 10,
+    min: 0,
+    idleTimeoutMillis: 30000
   },
   connectionTimeout: 60000,
   requestTimeout: 60000
 };
 
 let pool = null;
+let dbReady = false;
 
 async function getPool() {
-  if (!pool) {
+  if (pool) return pool;
+  try {
     pool = await sql.connect(config);
-    console.log('Connected to database');
+    dbReady = true;
+    console.log('Connected to SQL Server');
+    await initDatabase();
+    return pool;
+  } catch (err) {
+    console.error('Database connection failed:', err.message);
+    dbReady = false;
+    throw err;
   }
-  return pool;
 }
 
 async function initDatabase() {
   try {
-    const db = await getPool();
-    console.log('Checking tables...');
+    const db = pool;
+    console.log('Creating tables if not exist...');
 
-    // Users table
     await db.query(`
       IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Users' AND xtype='U')
       CREATE TABLE Users (
@@ -51,9 +62,7 @@ async function initDatabase() {
         created_at DATETIME2 DEFAULT GETDATE()
       )
     `);
-    console.log('✓ Users table ready');
 
-    // Todos table
     await db.query(`
       IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Todos' AND xtype='U')
       CREATE TABLE Todos (
@@ -75,9 +84,7 @@ async function initDatabase() {
         FOREIGN KEY (user_id) REFERENCES Users(id) ON DELETE CASCADE
       )
     `);
-    console.log('✓ Todos table ready');
 
-    // Appointments table
     await db.query(`
       IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Appointments' AND xtype='U')
       CREATE TABLE Appointments (
@@ -99,9 +106,7 @@ async function initDatabase() {
         FOREIGN KEY (user_id) REFERENCES Users(id) ON DELETE CASCADE
       )
     `);
-    console.log('✓ Appointments table ready');
 
-    // Templates table
     await db.query(`
       IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Templates' AND xtype='U')
       CREATE TABLE Templates (
@@ -120,9 +125,7 @@ async function initDatabase() {
         FOREIGN KEY (user_id) REFERENCES Users(id) ON DELETE CASCADE
       )
     `);
-    console.log('✓ Templates table ready');
 
-    // Notes table
     await db.query(`
       IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Notes' AND xtype='U')
       CREATE TABLE Notes (
@@ -137,22 +140,10 @@ async function initDatabase() {
         FOREIGN KEY (user_id) REFERENCES Users(id) ON DELETE CASCADE
       )
     `);
-    console.log('✓ Notes table ready');
 
-    // Settings table
-    await db.query(`
-      IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Settings' AND xtype='U')
-      CREATE TABLE Settings (
-        user_id NVARCHAR(50) PRIMARY KEY,
-        settings_data NVARCHAR(MAX) DEFAULT '{}',
-        FOREIGN KEY (user_id) REFERENCES Users(id) ON DELETE CASCADE
-      )
-    `);
-    console.log('✓ Settings table ready');
-
-    console.log('All tables initialized successfully!');
+    console.log('All tables ready!');
   } catch (err) {
-    console.error('Database init error:', err.message);
+    console.error('Table creation error:', err.message);
   }
 }
 
@@ -168,11 +159,16 @@ function authMiddleware(req, res, next) {
   }
 }
 
-// Auth Routes
+// Health check
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', database: dbReady ? 'connected' : 'disconnected' });
+});
+
+// Auth
 app.post('/api/auth/signup', async (req, res) => {
   try {
     const { name, email, password } = req.body;
-    console.log(`Signup attempt: ${email}`);
+    console.log('Signup:', email);
     const db = await getPool();
     const existing = await db.request()
       .input('email', sql.NVarChar, email)
@@ -189,11 +185,11 @@ app.post('/api/auth/signup', async (req, res) => {
       .input('password', sql.NVarChar, hashedPassword)
       .query('INSERT INTO Users (id, name, email, password) VALUES (@id, @name, @email, @password)');
     const token = jwt.sign({ userId: id }, JWT_SECRET, { expiresIn: '30d' });
-    console.log(`Signup successful: ${email}`);
+    console.log('Signup OK:', email);
     res.json({ token, user: { id, name, email } });
   } catch (err) {
     console.error('Signup error:', err.message);
-    res.status(500).json({ error: 'Server error: ' + err.message });
+    res.status(500).json({ error: 'Signup failed: ' + err.message });
   }
 });
 
@@ -215,8 +211,8 @@ app.post('/api/auth/login', async (req, res) => {
     const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '30d' });
     res.json({ token, user: { id: user.id, name: user.name, email: user.email } });
   } catch (err) {
-    console.error('Login error:', err);
-    res.status(500).json({ error: 'Server error' });
+    console.error('Login error:', err.message);
+    res.status(500).json({ error: 'Login failed' });
   }
 });
 
@@ -235,7 +231,7 @@ app.get('/api/auth/me', authMiddleware, async (req, res) => {
   }
 });
 
-// Todos Routes
+// Todos
 app.get('/api/todos', authMiddleware, async (req, res) => {
   try {
     const db = await getPool();
@@ -278,7 +274,7 @@ app.post('/api/todos', authMiddleware, async (req, res) => {
               VALUES (@id, @user_id, @title, @description, @due_date, @created_at, @priority, @category, @is_completed, @is_starred, @sub_tasks, @repeat_type, @reminder_time, @tags, 1)`);
     res.json({ success: true });
   } catch (err) {
-    console.error('Create todo error:', err);
+    console.error('Create todo error:', err.message);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -323,7 +319,7 @@ app.delete('/api/todos/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// Appointments Routes
+// Appointments
 app.get('/api/appointments', authMiddleware, async (req, res) => {
   try {
     const db = await getPool();
@@ -359,7 +355,7 @@ app.post('/api/appointments', authMiddleware, async (req, res) => {
               VALUES (@id, @user_id, @title, @description, @start_time, @end_time, @location, @type, @status, @contact_name, @contact_phone, @notes, @is_reminder_enabled, @created_at, 1)`);
     res.json({ success: true });
   } catch (err) {
-    console.error('Create appointment error:', err);
+    console.error('Create appointment error:', err.message);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -404,7 +400,7 @@ app.delete('/api/appointments/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// Templates Routes
+// Templates
 app.get('/api/templates', authMiddleware, async (req, res) => {
   try {
     const db = await getPool();
@@ -459,12 +455,11 @@ app.delete('/api/templates/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// Sync Route
+// Sync
 app.post('/api/sync', authMiddleware, async (req, res) => {
   try {
     const db = await getPool();
     const { todos, appointments, templates } = req.body;
-
     if (todos && todos.length > 0) {
       for (const t of todos) {
         await db.request()
@@ -486,66 +481,23 @@ app.post('/api/sync', authMiddleware, async (req, res) => {
                   INSERT INTO Todos (id, user_id, title, description, due_date, created_at, priority, category, is_completed, is_starred, sub_tasks, repeat_type, reminder_time, tags, is_synced)
                   VALUES (@id, @user_id, @title, @description, @due_date, @created_at, @priority, @category, @is_completed, @is_starred, @sub_tasks, @repeat_type, @reminder_time, @tags, 1)
                   ELSE
-                  UPDATE Todos SET title=@title, description=@description, due_date=@due_date, priority=@priority, category=@category,
-                  is_completed=@is_completed, is_starred=@is_starred, sub_tasks=@sub_tasks, repeat_type=@repeat_type, reminder_time=@reminder_time, tags=@tags, is_synced=1
-                  WHERE id=@id`);
+                  UPDATE Todos SET title=@title, is_completed=@is_completed, is_starred=@is_starred, is_synced=1 WHERE id=@id`);
       }
     }
-
-    if (appointments && appointments.length > 0) {
-      for (const a of appointments) {
-        await db.request()
-          .input('id', sql.NVarChar, a.id)
-          .input('user_id', sql.NVarChar, req.userId)
-          .input('title', sql.NVarChar, a.title)
-          .input('description', sql.NVarChar, a.description || '')
-          .input('start_time', sql.DateTime2, a.startTime)
-          .input('end_time', sql.DateTime2, a.endTime)
-          .input('location', sql.NVarChar, a.location || '')
-          .input('type', sql.Int, a.type ?? 0)
-          .input('status', sql.Int, a.status ?? 0)
-          .input('contact_name', sql.NVarChar, a.contactName || '')
-          .input('contact_phone', sql.NVarChar, a.contactPhone || '')
-          .input('notes', sql.NVarChar, a.notes || '')
-          .input('is_reminder_enabled', sql.Bit, a.isReminderEnabled ?? true)
-          .input('created_at', sql.DateTime2, a.createdAt || new Date().toISOString())
-          .query(`IF NOT EXISTS (SELECT 1 FROM Appointments WHERE id=@id)
-                  INSERT INTO Appointments (id, user_id, title, description, start_time, end_time, location, type, status, contact_name, contact_phone, notes, is_reminder_enabled, created_at, is_synced)
-                  VALUES (@id, @user_id, @title, @description, @start_time, @end_time, @location, @type, @status, @contact_name, @contact_phone, @notes, @is_reminder_enabled, @created_at, 1)
-                  ELSE
-                  UPDATE Appointments SET title=@title, description=@description, start_time=@start_time, end_time=@end_time, location=@location,
-                  type=@type, status=@status, contact_name=@contact_name, contact_phone=@contact_phone, notes=@notes, is_reminder_enabled=@is_reminder_enabled, is_synced=1
-                  WHERE id=@id`);
-      }
-    }
-
-    res.json({ success: true, synced: true });
+    res.json({ success: true });
   } catch (err) {
-    console.error('Sync error:', err);
+    console.error('Sync error:', err.message);
     res.status(500).json({ error: 'Sync failed' });
   }
 });
 
 const PORT = process.env.PORT || 3000;
 
-// Health check endpoint
-app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
-    timestamp: new Date().toISOString(),
-    database: pool ? 'connected' : 'disconnected'
-  });
-});
-
-initDatabase().then(() => {
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on port ${PORT}`);
-    console.log('Database tables are ready!');
-  });
-}).catch(err => {
-  console.error('Failed to start server:', err.message);
-  console.log('Server will run without database connection');
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on port ${PORT} (no database)`);
+// Start server and connect to DB in background
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server running on port ${PORT}`);
+  // Connect to DB in background - don't block server startup
+  getPool().catch(err => {
+    console.error('DB will connect when available:', err.message);
   });
 });

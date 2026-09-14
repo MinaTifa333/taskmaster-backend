@@ -21,8 +21,8 @@ const config = {
     trustServerCertificate: true,
     enableArithAbort: true
   },
-  connectionTimeout: 30000,
-  requestTimeout: 30000
+  connectionTimeout: 60000,
+  requestTimeout: 60000
 };
 
 let pool = null;
@@ -172,6 +172,7 @@ function authMiddleware(req, res, next) {
 app.post('/api/auth/signup', async (req, res) => {
   try {
     const { name, email, password } = req.body;
+    console.log(`Signup attempt: ${email}`);
     const db = await getPool();
     const existing = await db.request()
       .input('email', sql.NVarChar, email)
@@ -188,9 +189,10 @@ app.post('/api/auth/signup', async (req, res) => {
       .input('password', sql.NVarChar, hashedPassword)
       .query('INSERT INTO Users (id, name, email, password) VALUES (@id, @name, @email, @password)');
     const token = jwt.sign({ userId: id }, JWT_SECRET, { expiresIn: '30d' });
+    console.log(`Signup successful: ${email}`);
     res.json({ token, user: { id, name, email } });
   } catch (err) {
-    console.error('Signup error:', err);
+    console.error('Signup error:', err.message);
     res.status(500).json({ error: 'Server error: ' + err.message });
   }
 });

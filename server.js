@@ -221,13 +221,64 @@ app.get('/api/auth/me', authMiddleware, async (req, res) => {
     const db = await getPool();
     const result = await db.request()
       .input('id', sql.NVarChar, req.userId)
-      .query('SELECT id, name, email FROM Users WHERE id = @id');
+      .query('SELECT id, name, email, created_at FROM Users WHERE id = @id');
     if (result.recordset.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
     res.json({ user: result.recordset[0] });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.put('/api/auth/profile', authMiddleware, async (req, res) => {
+  try {
+    const { name, email } = req.body;
+    const db = await getPool();
+    if (email) {
+      const existing = await db.request()
+        .input('email', sql.NVarChar, email)
+        .input('id', sql.NVarChar, req.userId)
+        .query('SELECT id FROM Users WHERE email = @email AND id != @id');
+      if (existing.recordset.length > 0) {
+        return res.status(400).json({ error: 'Email already in use' });
+      }
+    }
+    await db.request()
+      .input('id', sql.NVarChar, req.userId)
+      .input('name', sql.NVarChar, name)
+      .input('email', sql.NVarChar, email)
+      .query('UPDATE Users SET name = @name, email = @email WHERE id = @id');
+    res.json({ user: { id: req.userId, name, email } });
+  } catch (err) {
+    console.error('Profile update error:', err.message);
+    res.status(500).json({ error: 'Failed to update profile' });
+  }
+});
+
+app.put('/api/auth/password', authMiddleware, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const db = await getPool();
+    const result = await db.request()
+      .input('id', sql.NVarChar, req.userId)
+      .query('SELECT password FROM Users WHERE id = @id');
+    if (result.recordset.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    const valid = await bcrypt.compare(currentPassword, result.recordset[0].password);
+    if (!valid) {
+      return res.status(400).json({ error: 'Current password is incorrect' });
+    }
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await db.request()
+      .input('id', sql.NVarChar, req.userId)
+      .input('password', sql.NVarChar, hashedPassword)
+      .query('UPDATE Users SET password = @password WHERE id = @id');
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Password change error:', err.message);
+    res.status(500).json({ error: 'Failed to change password' });
   }
 });
 

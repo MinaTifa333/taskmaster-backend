@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: taskmaster-backend
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: JWT_SECRET
+        value: taskmaster_secret_key_2026_super_secure
+      - key: NODE_ENV
+        value: production
